@@ -28,6 +28,22 @@ python src/data/prepare.py
 
 Statistics, split checks and the manual review of category rules are in `notebooks/01_data.ipynb`.
 
+## Features
+
+Frozen CLIP ViT-B/16 (OpenAI weights) features for every chart (global embedding and 196 patch tokens) and statement, saved to `data/features/`. Charts are padded to a square before resizing so no part is cropped.
+
+```bash
+python -m src.features.extract
+```
+
+## Baselines
+
+```bash
+python -m src.models.zero_shot
+```
+
+Preprocessing, feature checks and zero-shot results are in `notebooks/02_features_baselines.ipynb`.
+
 ## Layout
 
 ```
