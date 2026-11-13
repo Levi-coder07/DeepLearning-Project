@@ -38,19 +38,38 @@ python -m src.features.extract
 
 ## Baselines
 
+- `zero_shot`: picks the statement with the higher CLIP similarity to the chart. No training.
+- `text_only`: MLP on the statement embedding only, to detect linguistic shortcuts. Needs only `data/features/texts.pt` and runs on CPU.
+
 ```bash
 python -m src.models.zero_shot
+python -m src.models.text_only
 ```
 
 Preprocessing, feature checks and zero-shot results are in `notebooks/02_features_baselines.ipynb`.
 
+## Models
+
+Trainable heads on frozen CLIP features (`src/models/heads.py`), all with ~1.58M parameters:
+
+- `global_mlp`: MLP on the global embedding and the statement.
+- `attention_fixed`: a learned query attends over the patches.
+- `attention_guided`: the statement attends over the patches.
+
+```bash
+python -m src.run --seeds 0 1 2
+```
+
+Results are saved to `results/models.csv` and weights to `checkpoints/<model>_seed<seed>.pt`. All models are trained with `src/train.py` (AdamW, cross-entropy over the two statements, best epoch on val).
+
 ## Layout
 
 ```
-configs/     experiment configs
-notebooks/   exploration and analysis
-scripts/     data download
-src/data/    loading, cleaning, splits
+notebooks/    exploration and analysis
+scripts/      data download
+src/data/     loading, cleaning, splits
 src/features/ CLIP feature extraction
-src/models/  baselines and attention models
+src/models/   baselines and attention models
+src/train.py  training loop
+src/run.py    trains and evaluates the attention models
 ```

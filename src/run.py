@@ -5,7 +5,7 @@ import pandas as pd
 from src.data.prepare import OUT_DIR
 from src.models.heads import AttentionFixed, AttentionGuided, GlobalMLP
 from src.models.zero_shot import RESULTS_DIR, accuracy
-from src.train import Features, fit, predict
+from src.train import Features, fit, predict, save
 
 MODELS = {
     "global_mlp": GlobalMLP,
@@ -29,6 +29,7 @@ def main():
         for seed in args.seeds:
             print(f"== {name}, seed {seed}")
             model = fit(MODELS[name], features, seed=seed)
+            save(model, name, seed)
             test["pred"] = predict(model, features, test_rows).cpu().numpy()
             params = sum(p.numel() for p in model.parameters())
             results.append({"model": name, "seed": seed, "params": params, **accuracy(test)})
@@ -39,5 +40,5 @@ def main():
     print(results.groupby("model").mean(numeric_only=True).drop(columns="seed").round(1))
 
 
-if name == "main":
+if __name__ == "__main__":
     main()

@@ -4,12 +4,14 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from src.data.prepare import OUT_DIR
+from src.data.prepare import OUT_DIR, ROOT
 from src.features.extract import FEATURES_DIR
+
+CHECKPOINT_DIR = ROOT / "checkpoints"
 
 
 class Features:
-    def init(self, with_images=True, device="cuda"):
+    def __init__(self, with_images=True, device="cuda" if torch.cuda.is_available() else "cpu"):
         texts = torch.load(FEATURES_DIR / "texts.pt")
         self.text_index = {s: i for i, s in enumerate(texts["statements"])}
         self.text_emb = texts["emb"].to(device)
@@ -33,15 +35,17 @@ class Features:
 
     def inputs(self, rows):
         image, option_0, option_1 = rows[:, 0], rows[:, 1], rows[:, 2]
-        global_emb = self.global_emb[image].float() if self.global_emb is not None else None
+        global_emb = F.normalize(self.global_emb[image].float(), dim=-1) if self.global_emb is not None else None
         patches = self.patches[image].float() if self.patches is not None else None
-        return global_emb, patches, self.text_emb[option_0].float(), self.text_emb[option_1].float()
+        t0 = F.normalize(self.text_emb[option_0].float(), dim=-1)
+        t1 = F.normalize(self.text_emb[option_1].float(), dim=-1)
+        return global_emb, patches, t0, t1
 
 
 @torch.no_grad()
 def predict(model, features, rows, batch_size=1024):
     model.eval()
-    return torch.cat([model(features.inputs(batch)).argmax(1) for batch in rows.split(batch_size)])
+    return torch.cat([model(*features.inputs(batch)).argmax(1) for batch in rows.split(batch_size)])
 
 
 def fit(make_model, features, epochs=20, lr=1e-3, batch_size=256, seed=0):
@@ -56,7 +60,7 @@ def fit(make_model, features, epochs=20, lr=1e-3, batch_size=256, seed=0):
         total_loss = 0
         order = torch.randperm(len(train), device=features.device)
         for rows in train[order].split(batch_size):
-            loss = F.cross_entropy(model(features.inputs(rows)), rows[:, 3])
+            loss = F.cross_entropy(model(*features.inputs(rows)), rows[:, 3])
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -69,3 +73,8 @@ def fit(make_model, features, epochs=20, lr=1e-3, batch_size=256, seed=0):
 
     model.load_state_dict(best_state)
     return model
+
+
+def save(model, name, seed):
+    CHECKPOINT_DIR.mkdir(exist_ok=True)
+    torch.save(model.state_dict(), CHECKPOINT_DIR / f"{name}_seed{seed}.pt")
