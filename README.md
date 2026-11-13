@@ -5,7 +5,7 @@ Deep Learning course project - Levi Castillon, Luisa Villanueva (FGV).
 ## Setup
 
 ```bash
-python3.12 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -19,6 +19,14 @@ python scripts/download_data.py
 ```
 
 Image paths in the CSV (`img_path`) are relative to `data/raw/`.
+
+Build the train/val/test splits (3,000 charts per source, 70/15/15 split by chart) into `data/processed/`:
+
+```bash
+python src/data/prepare.py
+```
+
+Statistics, split checks and the manual review of category rules are in `notebooks/01_data.ipynb`.
 
 ## Layout
 

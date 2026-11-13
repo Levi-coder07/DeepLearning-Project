@@ -1,5 +1,5 @@
 # Data and artifacts
-data/
+/data/
 results/*
 !results/.gitkeep
 checkpoints/
