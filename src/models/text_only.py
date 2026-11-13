@@ -17,7 +17,7 @@ class TextOnly(nn.Module):
 
 
 def main():
-    features = Features(with_images=False, device="cpu")
+    features = Features(with_images=False)
     model = fit(TextOnly, features, seed=0)
     save(model, "text_only", 0)
     test = pd.read_csv(OUT_DIR / "test.csv")
