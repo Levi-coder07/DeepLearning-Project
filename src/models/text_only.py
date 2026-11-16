@@ -3,7 +3,7 @@ import torch
 from torch import nn
 
 from src.data.prepare import OUT_DIR
-from src.models.zero_shot import accuracy
+from src.eval import accuracy
 from src.train import Features, fit, predict, save
 
 
@@ -21,8 +21,7 @@ def main():
     model = fit(TextOnly, features, seed=0)
     save(model, "text_only", 0)
     test = pd.read_csv(OUT_DIR / "test.csv")
-    test["pred"] = predict(model, features, features.split("test")).cpu().numpy()
-    print(accuracy(test))
+    print(accuracy(test, predict(model, features, features.split("test")).cpu().numpy()))
 
 
 if __name__ == "__main__":

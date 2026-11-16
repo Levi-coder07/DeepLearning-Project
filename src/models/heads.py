@@ -51,3 +51,17 @@ class AttentionGuided(nn.Module):
         z, _ = self.attention(t, patches, patches)
         z = F.normalize(z, dim=-1)
         return self.mlp(torch.cat([z, t], 2)).squeeze(2)
+
+class MeanPatches(nn.Module):
+    """Ablation: attention with uniform weights, i.e. the projected mean of the patches."""
+
+    def __init__(self, hidden=256):
+        super().__init__()
+        self.value = nn.Linear(PATCH_DIM, DIM)
+        self.out = nn.Linear(DIM, DIM)
+        self.mlp = scorer(hidden)
+
+    def forward(self, global_emb, patches, t0, t1):
+        t = torch.stack([t0, t1], 1)
+        z = F.normalize(self.out(self.value(patches.mean(1))), dim=-1)[:, None].expand_as(t)
+        return self.mlp(torch.cat([z, t], 2)).squeeze(2)

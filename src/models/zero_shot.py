@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 
 from src.data.prepare import OUT_DIR, ROOT
+from src.eval import accuracy
 from src.features.extract import FEATURES_DIR
 
 RESULTS_DIR = ROOT / "results"
@@ -19,15 +20,6 @@ def predict(df, images, texts):
     option_0 = lookup(texts["emb"], texts["statements"], df.option_0)
     option_1 = lookup(texts["emb"], texts["statements"], df.option_1)
     return ((image * option_1).sum(-1) > (image * option_0).sum(-1)).long().numpy()
-
-
-def accuracy(df):
-    correct = df.pred == df.label
-    return pd.concat([
-        pd.Series({"all": correct.mean()}),
-        correct.groupby(df.source).mean(),
-        correct.groupby(df.category).mean(),
-    ]).mul(100).round(1)
 
 
 def main():
