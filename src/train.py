@@ -11,17 +11,25 @@ CHECKPOINT_DIR = ROOT / "checkpoints"
 
 
 class Features:
-    def __init__(self, with_images=True, device="cuda" if torch.cuda.is_available() else "cpu"):
+    """CLIP features on `device`.
+
+    With tiles=True the patches are the 784 patches of the 2x2 quadrants at 448x448
+    (`python -m src.features.extract --tiles`). They do not fit on a 10 GB GPU, so they
+    stay in CPU memory and each batch is copied to the GPU in `inputs`.
+    """
+
+    def __init__(self, with_images=True, device="cuda" if torch.cuda.is_available() else "cpu", tiles=False):
         texts = torch.load(FEATURES_DIR / "texts.pt")
         self.text_index = {s: i for i, s in enumerate(texts["statements"])}
         self.text_emb = texts["emb"].to(device)
         self.image_index, self.global_emb, self.patches = {}, None, None
         if with_images:
-            images = torch.load(FEATURES_DIR / "images.pt")
+            images = torch.load(FEATURES_DIR / ("images_tiles.pt" if tiles else "images.pt"))
             self.image_index = {p: i for i, p in enumerate(images["paths"])}
             self.global_emb = images["global"].to(device)
-            self.patches = images["patches"].to(device)
+            self.patches = images["patches"] if tiles else images["patches"].to(device)
         self.device = device
+        self.eval_batch_size = 256 if tiles else 1024
 
     def split(self, name):
         df = pd.read_csv(OUT_DIR / f"{name}.csv")
@@ -36,15 +44,18 @@ class Features:
     def inputs(self, rows):
         image, option_0, option_1 = rows[:, 0], rows[:, 1], rows[:, 2]
         global_emb = F.normalize(self.global_emb[image].float(), dim=-1) if self.global_emb is not None else None
-        patches = self.patches[image].float() if self.patches is not None else None
+        patches = None
+        if self.patches is not None:
+            patches = self.patches[image.to(self.patches.device)].to(self.device, non_blocking=True).float()
         t0 = F.normalize(self.text_emb[option_0].float(), dim=-1)
         t1 = F.normalize(self.text_emb[option_1].float(), dim=-1)
         return global_emb, patches, t0, t1
 
 
 @torch.no_grad()
-def predict(model, features, rows, batch_size=1024):
+def predict(model, features, rows, batch_size=None):
     model.eval()
+    batch_size = batch_size or features.eval_batch_size
     return torch.cat([model(*features.inputs(batch)).argmax(1) for batch in rows.split(batch_size)])
 
 

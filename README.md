@@ -34,6 +34,7 @@ Frozen CLIP ViT-B/16 (OpenAI weights) features for every chart (global embedding
 
 ```bash
 python -m src.features.extract
+python -m src.features.extract --tiles   # 2x2 quadrants at 448x448: 784 patches per chart, ~11 GB
 ```
 
 ## Baselines
@@ -60,6 +61,7 @@ Trainable heads on frozen CLIP features (`src/models/heads.py`), the three main 
 ```bash
 python -m src.run --seeds 0 1 2
 python -m src.run --models mean_patches --seeds 0 1 2   # one model only
+python -m src.run --tiles --models attention_fixed attention_guided mean_patches --seeds 0 1 2   # 448x448, saved as <model>_tiles
 ```
 
 `src.run` trains these models and `text_only` with each seed. Results (accuracy, shuffled-image accuracy, parameters, training time, peak GPU memory) are saved to `results/models.csv` (rerunning a model replaces only its rows), per-statement test predictions to `results/predictions_test.csv`, and weights to `checkpoints/<model>_seed<seed>.pt`. All models are trained with `src/train.py` (AdamW, cross-entropy over the two statements, best epoch on val).
@@ -102,7 +104,21 @@ So conditioning on the statement helps, but not through visible localization in 
 
 **Cost.** All three heads have about 1.58M parameters. Attention over the patches makes training about 13× slower and needs about 2× the peak GPU memory. Peak memory is the extra memory during training, on top of the features kept on the GPU. Most of the 0.9 GB for the cheap models comes from gathering batch features.
 
-**Limitations.** Every model uses frozen CLIP ViT-B/16 features at 224×224. This resolution is likely too low to read small text and exact values (an encoding bottleneck), which may explain why FigureQA and ChartQA stay near chance for all models. Attention maps are qualitative and are not evidence of causal grounding.
+**Resolution: is the bottleneck in the encoding?** ChartQA and FigureQA stay near chance for every model at 224×224. To test whether that is a resolution problem, each padded chart is resized to 448×448 and cut into 4 quadrants, each encoded by the same frozen CLIP. The attention heads then see 784 patches instead of 196; nothing else changes. Test accuracy (mean ± std over 3 seeds):
+
+| | fixed 224 | fixed 448 | guided 224 | guided 448 | mean of patches 224 | mean of patches 448 |
+|---|---|---|---|---|---|---|
+| **all** | 58.7 ± 0.3 | 56.6 ± 0.9 | 60.3 ± 0.1 | **60.8 ± 1.0** | 57.1 ± 1.7 | 57.3 ± 2.1 |
+| chartqa | 54.3 | 53.1 | 53.6 | **56.4 ± 3.3** | 53.9 | 54.3 |
+| figureqa | 51.5 | 50.5 | 52.4 | 51.9 | 50.8 | 50.9 |
+| lookup | 57.4 | 56.1 | 58.0 | **60.2 ± 3.3** | 56.8 | 56.9 |
+| training time | 89 s | 825 s | 96 s | 821 s | 9 s | 587 s |
+
+- Only guided attention benefits, and only where reading matters: ChartQA +2.8 (CI 0.9 to 4.8, p = 0.006) and lookups +2.2 (CI 0.4 to 3.9). ChartQA has the highest native resolution (about 800×560). Overall the gain is +0.5 and not significant. The ChartQA gain is uneven across seeds (two improve, one does not).
+- Fixed attention gets worse (−2.1): one learned query over 784 patches dilutes. So guided minus fixed grows from 1.6 to 4.2 points (CI 3.2 to 5.2), significant on every source and category. Guided attention at 448 is also significantly better than `global_mlp` (+1.1, CI 0.1 to 2.0, p = 0.025).
+- FigureQA does not move and ChartQA stays near 56%. Resolution explains only a small part of the encoding bottleneck.
+
+**Limitations.** Every model uses frozen CLIP ViT-B/16 features. Even at 448×448, ChartQA and FigureQA stay close to chance, so most of the information needed to read exact values is not available in the frozen patch features (an encoding bottleneck). The 448 runs keep the 784 patches in CPU memory, which makes training about 8.5× slower. Attention maps are qualitative and are not evidence of causal grounding.
 
 ## Layout
 
@@ -112,7 +128,7 @@ scripts/      data download
 src/data/     loading, cleaning, splits
 src/features/ CLIP feature extraction
 src/models/   baselines and attention models
-src/eval.py   accuracy overall, per source and per category
+src/eval.py   accuracy (overall, per source, per category) and paired bootstrap
 src/train.py  training loop
 src/run.py    trains and evaluates all trainable models
 ```

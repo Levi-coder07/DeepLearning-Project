@@ -36,9 +36,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", nargs="+", default=list(MODELS))
     parser.add_argument("--seeds", nargs="+", type=int, default=[0])
+    parser.add_argument("--tiles", action="store_true",
+                        help="use the 784 patches of the 2x2 quadrants at 448x448; results are saved as <model>_tiles")
     args = parser.parse_args()
 
-    features = Features()
+    features = Features(tiles=args.tiles)
+    suffix = "_tiles" if args.tiles else ""
     test = pd.read_csv(OUT_DIR / "test.csv")
     test_rows = features.split("test")
     shuffled_rows = shuffle_images(test_rows)
@@ -47,14 +50,15 @@ def main():
     results_path, predictions_path = RESULTS_DIR / "models.csv", RESULTS_DIR / "predictions_test.csv"
     predictions = pd.read_csv(predictions_path) if predictions_path.exists() else test.copy()
     results = []
-    for name in args.models:
+    for model_name in args.models:
+        name = model_name + suffix
         for seed in args.seeds:
             print(f"== {name}, seed {seed}")
             if cuda:
                 torch.cuda.reset_peak_memory_stats()
                 base = torch.cuda.memory_allocated()
             start = time.time()
-            model = fit(MODELS[name], features, seed=seed)
+            model = fit(MODELS[model_name], features, seed=seed)
             seconds = time.time() - start
             memory = (torch.cuda.max_memory_allocated() - base) / 2**20 if cuda else float("nan")
             save(model, name, seed)
@@ -74,7 +78,7 @@ def main():
         old = pd.read_csv(results_path)
         rerun = old.set_index(["model", "seed"]).index.isin(results.set_index(["model", "seed"]).index)
         results = pd.concat([old[~rerun], results], ignore_index=True)
-    order = {name: i for i, name in enumerate(MODELS)}
+    order = {name + s: i for s in ["", "_tiles"] for i, name in enumerate(MODELS, len(MODELS) * bool(s))}
     results = results.sort_values(["model", "seed"], key=lambda c: c.map(order) if c.name == "model" else c)
     RESULTS_DIR.mkdir(exist_ok=True)
     results.to_csv(results_path, index=False)

@@ -27,14 +27,14 @@ def correct(df, model, seeds=(0, 1, 2)):
     return np.mean([df[f"{model}_seed{s}"] == df.label for s in seeds], axis=0)
 
 
-def paired_bootstrap(df, a, b, n=10_000, seed=0):
+def paired_bootstrap(df, a, b, n=10_000, seed=0, seeds=(0, 1, 2)):
     """Accuracy difference a - b (points) with a 95% CI and a two-sided p-value.
 
     Both models are scored on the same rows, averaged over seeds. Statements of
     the same chart are not independent, so the bootstrap resamples charts
     (the `image` column), not rows.
     """
-    diff = pd.Series(correct(df, a) - correct(df, b), index=df.index)
+    diff = pd.Series(correct(df, a, seeds) - correct(df, b, seeds), index=df.index)
     by_chart = diff.groupby(df.image.values).agg(["sum", "count"]).to_numpy()
     idx = np.random.default_rng(seed).integers(0, len(by_chart), (n, len(by_chart)))
     sums = by_chart[idx].sum(1)
