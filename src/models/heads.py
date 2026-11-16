@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 DIM = 512
@@ -31,10 +32,12 @@ class AttentionFixed(nn.Module):
         self.attention = attention(heads)
         self.mlp = scorer(hidden)
 
-    def forward(self, globalemb, patches, t0, t1):
+    def forward(self, global_emb, patches, t0, t1):
         t = torch.stack([t0, t1], 1)
-        z, _ = self.attention(self.query.expand(len(t), -1, -1), patches, patches)
-        return self.mlp(torch.cat([z.expand_as(t), t], 2)).squeeze(2)
+        query = F.normalize(self.query, dim=-1).expand(len(t), -1, -1)
+        z, _ = self.attention(query, patches, patches)
+        z = F.normalize(z, dim=-1).expand_as(t)
+        return self.mlp(torch.cat([z, t], 2)).squeeze(2)
 
 
 class AttentionGuided(nn.Module):
@@ -43,7 +46,8 @@ class AttentionGuided(nn.Module):
         self.attention = attention(heads)
         self.mlp = scorer(hidden)
 
-    def forward(self, globalemb, patches, t0, t1):
+    def forward(self, global_emb, patches, t0, t1):
         t = torch.stack([t0, t1], 1)
         z, _ = self.attention(t, patches, patches)
+        z = F.normalize(z, dim=-1)
         return self.mlp(torch.cat([z, t], 2)).squeeze(2)
