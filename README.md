@@ -1,8 +1,53 @@
 # Global and Text-Guided Regional Representations for Chart–Text Matching
 
-Deep Learning course project - Levi Castillon, Luisa Villanueva (FGV).
+Deep Learning course project — Levi Castillon, Luisa Villanueva (FGV).
 
-## Setup
+Given a chart and two statements, choose the correct statement. We investigate whether aggregating regional CLIP features helps compared with a whole-chart embedding, and whether conditioning that aggregation on the statement improves performance.
+
+## Approach
+
+All experiments use frozen CLIP ViT-B/16 with OpenAI weights. Only the scoring heads are trained, which keeps the encoder constant across comparisons and allows features to be cached.
+
+| Model | Approach | Purpose |
+|---|---|---|
+| `zero_shot` | Similarity between whole-chart and statement embeddings; no training | Pretrained baseline |
+| `text_only` | MLP on each statement embedding; no image | Check linguistic shortcuts |
+| `global_mlp` | MLP on whole-chart and statement embeddings | Trained global baseline |
+| `attention_fixed` | A learned, statement-independent query pools patch features | Test regional aggregation |
+| `attention_guided` | Each statement queries the patch features | Test text conditioning |
+| `mean_patches` | Uniform pooling of patch features followed by projection | Pooling ablation |
+
+The global representation has 512 values per chart; regional heads receive 196 × 768 patch values. The three main image heads have about 1.58M trainable parameters, but their input sizes and computational costs differ.
+
+Training uses a correct and an incorrect caption from Vision4Chart, with cross-entropy over their two scores. We do not fine-tune CLIP with the paper’s NegCLIP method; our experiments compare how heads use existing frozen representations.
+
+## Main findings
+
+Test accuracy (%), mean ± standard deviation over seeds 0, 1, and 2; zero-shot is evaluated once. Chance is 50%.
+
+| Model | Accuracy |
+|---|---:|
+| Zero-shot | 52.9 |
+| Text-only | 57.6 ± 0.6 |
+| Global MLP | 59.8 ± 0.2 |
+| Fixed attention | 58.7 ± 0.3 |
+| Guided attention | **60.3 ± 0.1** |
+| Mean pooling | 57.1 ± 1.7 |
+
+- **Text conditioning helps:** guided attention beats fixed attention by 1.6 percentage points (95% chart-bootstrap CI: 0.7 to 2.5). Its advantage over the global MLP is not statistically significant at standard resolution.
+- **Regional features have a cost:** attention heads take about 89–96 seconds to train versus 7 seconds for the global MLP, with about twice the extra peak GPU memory. These measurements exclude feature extraction.
+- **Dataset shortcuts matter:** text-only exceeds chance, and replacing charts with other charts reduces image-model accuracy. Neither check alone demonstrates precise visual grounding.
+- **Higher resolution gives limited gains:** four tiles provide 784 patches and raise guided attention to 60.8 ± 1.0%, with gains on ChartQA and lookup statements. The overall improvement over standard-resolution guided attention is not significant.
+
+Low accuracy does not establish that information is absent from CLIP features: the heads may also fail to extract it. Attention maps are qualitative, not evidence of causal grounding.
+
+See [detailed results](docs/results.md) for source/category breakdowns, controls, statistical comparisons, and resolution experiments. The [results notebook](notebooks/03_results.ipynb) contains attention maps and error examples.
+
+## Reproduce the experiments
+
+Run commands from the repository root. Feature extraction currently requires a CUDA GPU; training uses CUDA when available and otherwise CPU.
+
+### 1. Install dependencies
 
 ```bash
 python3 -m venv .venv
@@ -10,125 +55,72 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Data
+### 2. Download and prepare data
 
-[Vision4Chart](https://huggingface.co/datasets/Junteng/Vision4Chart) (Liu et al., 2025). Downloads the CSV and the ChartQA, FigureQA and DVQA images (~10 GB) into `data/raw/`:
+We use [Vision4Chart](https://huggingface.co/datasets/Junteng/Vision4Chart), selecting 3,000 charts each from ChartQA, FigureQA, and DVQA. Splits are 70/15/15 by chart, so a chart cannot appear in multiple splits.
 
 ```bash
 python scripts/download_data.py
-```
-
-Image paths in the CSV (`img_path`) are relative to `data/raw/`.
-
-Build the train/val/test splits (3,000 charts per source, 70/15/15 split by chart) into `data/processed/`:
-
-```bash
 python src/data/prepare.py
 ```
 
-Statistics, split checks and the manual review of category rules are in `notebooks/01_data.ipynb`.
+The download includes the CSV and images (~10 GB) in `data/raw/`. CSV image paths are relative to that directory; prepared splits are written to `data/processed/`.
 
-## Features
+### 3. Extract features and run models
 
-Frozen CLIP ViT-B/16 (OpenAI weights) features for every chart (global embedding and 196 patch tokens) and statement, saved to `data/features/`. Charts are padded to a square before resizing so no part is cropped.
+Charts are padded to a square before resizing to avoid cropping. Features are saved to `data/features/`.
 
 ```bash
 python -m src.features.extract
-python -m src.features.extract --tiles   # 2x2 quadrants at 448x448: 784 patches per chart, ~11 GB
+python -m src.models.zero_shot
+python -m src.run --seeds 0 1 2
 ```
 
-## Baselines
-
-- `zero_shot`: picks the statement with the higher CLIP similarity to the chart. No training.
-- `text_only`: MLP (512 → 256 → 1) on the statement embedding only, to detect linguistic shortcuts (57.6% on test). Needs only `data/features/texts.pt` and runs on CPU.
+The runner trains all five trainable heads with AdamW and selects the best epoch on validation accuracy. To run a subset, use `--models`, for example:
 
 ```bash
-python -m src.models.zero_shot
+python -m src.run --models attention_fixed attention_guided --seeds 0 1 2
+```
+
+The text-only baseline can also run separately on CPU with only the processed splits and `data/features/texts.pt`:
+
+```bash
 python -m src.models.text_only
 ```
 
-Preprocessing, feature checks and zero-shot results are in `notebooks/02_features_baselines.ipynb`.
+### 4. Optional: higher-resolution tiles
 
-## Models
-
-Trainable heads on frozen CLIP features (`src/models/heads.py`), the three main heads with ~1.58M parameters:
-
-- `global_mlp`: MLP on the global embedding and the statement.
-- `attention_fixed`: a learned query attends over the patches.
-- `attention_guided`: the statement attends over the patches.
-- `mean_patches` (ablation): uniform weights over the patches.
+After standard feature extraction, resize each padded chart to 448×448 and encode its four quadrants. This produces 784 patches per chart (~11 GB of patch features). Tile patches stay in CPU memory and are transferred by batch during training.
 
 ```bash
-python -m src.run --seeds 0 1 2
-python -m src.run --models mean_patches --seeds 0 1 2   # one model only
-python -m src.run --tiles --models attention_fixed attention_guided mean_patches --seeds 0 1 2   # 448x448, saved as <model>_tiles
+python -m src.features.extract --tiles
+python -m src.run --tiles --models attention_fixed attention_guided mean_patches --seeds 0 1 2
 ```
 
-`src.run` trains these models and `text_only` with each seed. Results (accuracy, shuffled-image accuracy, parameters, training time, peak GPU memory) are saved to `results/models.csv` (rerunning a model replaces only its rows), per-statement test predictions to `results/predictions_test.csv`, and weights to `checkpoints/<model>_seed<seed>.pt`. All models are trained with `src/train.py` (AdamW, cross-entropy over the two statements, best epoch on val).
+### Outputs
 
-## Results
+| Path | Contents |
+|---|---|
+| `results/models.csv` | Accuracy, shuffled-image accuracy, parameters, training time, and extra peak GPU memory |
+| `results/predictions_test.csv` | Test-pair predictions for each model and seed |
+| `checkpoints/<model>_seed<seed>.pt` | Trained head weights; tiled models use a `_tiles` suffix |
 
-Full analysis, attention maps and error examples: `notebooks/03_results.ipynb`. Test accuracy (%), mean over seeds 0, 1 and 2 (± std for the overall score):
+Rerunning a model/seed replaces its result rows while preserving other runs. Raw images, image features, and generated result CSVs are not included in this checkout; follow the steps above to regenerate them.
 
-| | zero_shot | text_only | global_mlp | attention_fixed | attention_guided | mean_patches* |
-|---|---|---|---|---|---|---|
-| **all** | 52.9 | 57.6 ± 0.6 | 59.8 ± 0.2 | 58.7 ± 0.3 | **60.3 ± 0.1** | 57.1 ± 1.7 |
-| chartqa | 51.5 | 52.1 | 52.7 | **54.3** | 53.6 | 53.9 |
-| dvqa | 58.0 | 67.9 | 73.9 | 70.6 | **75.3** | 67.0 |
-| figureqa | 49.3 | **52.9** | 52.8 | 51.5 | 52.4 | 50.8 |
-| comparison | 51.5 | 58.3 | **58.6** | 57.2 | 58.0 | 56.1 |
-| lookup | 53.2 | 55.9 | 56.4 | 57.4 | **58.0** | 56.8 |
-| other | 57.7 | 58.9 | 72.7 | 68.1 | **75.3** | 62.2 |
-| shuffled images | - | 57.6 | 54.8 | 52.6 | 53.5 | 55.1 |
-| parameters | 0 | 132k | 1.58M | 1.58M | 1.58M | 0.92M |
-| training time | - | 6 s | 7 s | 89 s | 96 s | 9 s |
-| peak GPU memory | - | 0.9 GB | 0.9 GB | 2.0 GB | 2.0 GB | 0.9 GB |
+## Repository guide
 
-\* Ablation: the attention head with uniform weights (projected mean of the 196 patches).
+| Path | Contents |
+|---|---|
+| [01_data.ipynb](notebooks/01_data.ipynb) | Data statistics, split checks, and category-rule review |
+| [02_features_baselines.ipynb](notebooks/02_features_baselines.ipynb) | Preprocessing, feature checks, and zero-shot evaluation |
+| [03_results.ipynb](notebooks/03_results.ipynb) | Experimental analysis, attention maps, and errors |
+| [src/data/](src/data/) | Data preparation and chart-level splits |
+| [src/features/](src/features/) | Frozen CLIP feature extraction |
+| [src/models/](src/models/) | Baselines and trainable heads |
+| [src/train.py](src/train.py) | Training and prediction |
+| [src/run.py](src/run.py) | Multi-model, multi-seed experiments |
+| [src/eval.py](src/eval.py) | Accuracy breakdowns and paired chart bootstrap |
 
-**Sanity checks.** `text_only` (57.6%) is well above zero-shot (52.9%), so the statements contain linguistic shortcuts. Adding the image (`global_mlp`) adds 2.2 points, mostly on DVQA (+6.1) and on `other` statements (+13.8). In the shuffled-image control, every test chart is replaced by a different chart. All image models then fall below `text_only` (52.6–55.1%), so their predictions do depend on the matching chart.
+## Reference
 
-**Text shortcuts.** We split the test pairs by how many `text_only` seeds get them right: wrong (0/3, 3,694 pairs), mixed (1–2/3, 3,773) and right (3/3, 5,656). `global_mlp` agrees with `text_only` on 76% of the pairs, against 66% for the attention models. So it scores higher where the text shortcut is right (86.5% vs 76.5% for guided attention) and much lower where it is wrong (20.4% vs 35.9%). On the mixed subset, where the text gives no consistent signal, guided attention beats `global_mlp` by 1.9 points (CI 0.4 to 3.4, p = 0.014) and fixed attention by 4.1 (CI 2.5 to 5.6). On the wrong subset every model stays below 50%: when the wording points to the wrong statement, the image rarely overrules it.
-
-**Significance.** Seed std only measures training noise. To account for the test sample too, `paired_bootstrap` in `src/eval.py` averages each model over the 3 seeds and resamples test **charts** (1,350, not the 13,123 correlated statement pairs) 10,000 times. The intervals below are 95% intervals of the paired difference.
-
-**RQ1: Does learned regional aggregation help?** No. Text-independent attention (`attention_fixed`) is 1.0 ± 0.5 points below the global embedding and less stable across seeds. The drop is borderline significant (95% CI over charts −2.0 to −0.03, p = 0.045). Its only gains are on ChartQA (+1.7) and lookups (+1.0), both within the seed variation.
-
-**RQ2: Does text conditioning help?** Yes. Guided attention beats fixed attention by 1.6 ± 0.4 points (95% CI over charts 0.7 to 2.5, p = 0.001). It has the highest score and is the most stable across seeds, but its +0.6 ± 0.3 over `global_mlp` is not significant (CI −0.3 to 1.5, p = 0.18). The effect is subtle in how it works. Guided attention is almost uniform: its entropy is about 5.05 nats, against 5.28 for uniform and 2.8 for the fixed query. The maps for the two candidate statements are nearly identical (total variation distance 0.03–0.05). Even so, the small statement-dependent differences matter:
-- When both candidates share one query (the mean of the two statements), accuracy drops to about 53%. This shared query is out of distribution for the scorer, so the drop is an upper bound on the effect.
-- Uniform pooling (`mean_patches`) is 3.2 ± 1.8 points worse than guided attention.
-
-So conditioning on the statement helps, but not through visible localization in the attention maps.
-
-**RQ3: When does text guidance help?** The gains are not where we expected. Guided minus fixed attention is +0.9 on comparisons, +0.6 on lookups and +7.1 on `other`. Almost all of the `other` gain comes from DVQA statements about chart structure (legend colors, bar labels). Only the DVQA and `other` gains are significant; the comparison gain is not (p ≈ 0.1). The hypothesis that comparison statements benefit most is not supported. On ChartQA, guided attention is not better than fixed attention (−0.7 ± 1.2).
-
-**Cost.** All three heads have about 1.58M parameters. Attention over the patches makes training about 13× slower and needs about 2× the peak GPU memory. Peak memory is the extra memory during training, on top of the features kept on the GPU. Most of the 0.9 GB for the cheap models comes from gathering batch features.
-
-**Resolution: is the bottleneck in the encoding?** ChartQA and FigureQA stay near chance for every model at 224×224. To test whether that is a resolution problem, each padded chart is resized to 448×448 and cut into 4 quadrants, each encoded by the same frozen CLIP. The attention heads then see 784 patches instead of 196; nothing else changes. Test accuracy (mean ± std over 3 seeds):
-
-| | fixed 224 | fixed 448 | guided 224 | guided 448 | mean of patches 224 | mean of patches 448 |
-|---|---|---|---|---|---|---|
-| **all** | 58.7 ± 0.3 | 56.6 ± 0.9 | 60.3 ± 0.1 | **60.8 ± 1.0** | 57.1 ± 1.7 | 57.3 ± 2.1 |
-| chartqa | 54.3 | 53.1 | 53.6 | **56.4 ± 3.3** | 53.9 | 54.3 |
-| figureqa | 51.5 | 50.5 | 52.4 | 51.9 | 50.8 | 50.9 |
-| lookup | 57.4 | 56.1 | 58.0 | **60.2 ± 3.3** | 56.8 | 56.9 |
-| training time | 89 s | 825 s | 96 s | 821 s | 9 s | 587 s |
-
-- Only guided attention benefits, and only where reading matters: ChartQA +2.8 (CI 0.9 to 4.8, p = 0.006) and lookups +2.2 (CI 0.4 to 3.9). ChartQA has the highest native resolution (about 800×560). Overall the gain is +0.5 and not significant. The ChartQA gain is uneven across seeds (two improve, one does not).
-- Fixed attention gets worse (−2.1): one learned query over 784 patches dilutes. So guided minus fixed grows from 1.6 to 4.2 points (CI 3.2 to 5.2), significant on every source and category. Guided attention at 448 is also significantly better than `global_mlp` (+1.1, CI 0.1 to 2.0, p = 0.025).
-- FigureQA does not move and ChartQA stays near 56%. Resolution explains only a small part of the encoding bottleneck.
-
-**Limitations.** Every model uses frozen CLIP ViT-B/16 features. Even at 448×448, ChartQA and FigureQA stay close to chance, so most of the information needed to read exact values is not available in the frozen patch features (an encoding bottleneck). The 448 runs keep the 784 patches in CPU memory, which makes training about 8.5× slower. Attention maps are qualitative and are not evidence of causal grounding.
-
-## Layout
-
-```
-notebooks/    exploration and analysis
-scripts/      data download
-src/data/     loading, cleaning, splits
-src/features/ CLIP feature extraction
-src/models/   baselines and attention models
-src/eval.py   accuracy (overall, per source, per category) and paired bootstrap
-src/train.py  training loop
-src/run.py    trains and evaluates all trainable models
-```
+Liu et al. (2025), [On the Perception Bottleneck of VLMs for Chart Understanding](https://aclanthology.org/2025.findings-emnlp.573/). We use their Vision4Chart data; this project studies aggregation heads rather than reproducing their encoder fine-tuning.

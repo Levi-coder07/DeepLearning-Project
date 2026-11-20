@@ -1,0 +1,56 @@
+# Detailed experimental results
+
+[Back to README](../README.md)
+
+Full analysis, attention maps and error examples: [results notebook](../notebooks/03_results.ipynb). Test accuracy (%), mean over seeds 0, 1 and 2 (± std for the overall score):
+
+| | zero_shot | text_only | global_mlp | attention_fixed | attention_guided | mean_patches* |
+|---|---|---|---|---|---|---|
+| **all** | 52.9 | 57.6 ± 0.6 | 59.8 ± 0.2 | 58.7 ± 0.3 | **60.3 ± 0.1** | 57.1 ± 1.7 |
+| chartqa | 51.5 | 52.1 | 52.7 | **54.3** | 53.6 | 53.9 |
+| dvqa | 58.0 | 67.9 | 73.9 | 70.6 | **75.3** | 67.0 |
+| figureqa | 49.3 | **52.9** | 52.8 | 51.5 | 52.4 | 50.8 |
+| comparison | 51.5 | 58.3 | **58.6** | 57.2 | 58.0 | 56.1 |
+| lookup | 53.2 | 55.9 | 56.4 | 57.4 | **58.0** | 56.8 |
+| other | 57.7 | 58.9 | 72.7 | 68.1 | **75.3** | 62.2 |
+| shuffled images | - | 57.6 | 54.8 | 52.6 | 53.5 | 55.1 |
+| parameters | 0 | 132k | 1.58M | 1.58M | 1.58M | 0.92M |
+| training time | - | 6 s | 7 s | 89 s | 96 s | 9 s |
+| peak GPU memory | - | 0.9 GB | 0.9 GB | 2.0 GB | 2.0 GB | 0.9 GB |
+
+\* Ablation: the attention head with uniform weights (projected mean of the 196 patches).
+
+**Sanity checks.** `text_only` (57.6%) is well above zero-shot (52.9%), so the statements contain linguistic shortcuts. Adding the image (`global_mlp`) adds 2.2 points, mostly on DVQA (+6.1) and on `other` statements (+13.8). In the shuffled-image control, every test chart is replaced by a different chart. All image models then fall below `text_only` (52.6–55.1%), so their predictions do depend on the matching chart.
+
+**Text shortcuts.** We split the test pairs by how many `text_only` seeds get them right: wrong (0/3, 3,694 pairs), mixed (1–2/3, 3,773) and right (3/3, 5,656). `global_mlp` agrees with `text_only` on 76% of the pairs, against 66% for the attention models. So it scores higher where the text shortcut is right (86.5% vs 76.5% for guided attention) and much lower where it is wrong (20.4% vs 35.9%). On the mixed subset, where the text gives no consistent signal, guided attention beats `global_mlp` by 1.9 points (CI 0.4 to 3.4, p = 0.014) and fixed attention by 4.1 (CI 2.5 to 5.6). On the wrong subset every model stays below 50%: when the wording points to the wrong statement, the image rarely overrules it.
+
+**Significance.** Seed std only measures training noise. To account for the test sample too, `paired_bootstrap` in [src/eval.py](../src/eval.py) averages each model over the 3 seeds and resamples test **charts** (1,350, not the 13,123 correlated statement pairs) 10,000 times. The intervals below are 95% intervals of the paired difference.
+
+**RQ1: Does learned regional aggregation help?** No. Text-independent attention (`attention_fixed`) is 1.0 ± 0.5 points below the global embedding and less stable across seeds. The drop is borderline significant (95% CI over charts −2.0 to −0.03, p = 0.045). Its only gains are on ChartQA (+1.7) and lookups (+1.0), both within the seed variation.
+
+**RQ2: Does text conditioning help?** Yes. Guided attention beats fixed attention by 1.6 ± 0.4 points (95% CI over charts 0.7 to 2.5, p = 0.001). It has the highest score and is the most stable across seeds, but its +0.6 ± 0.3 over `global_mlp` is not significant (CI −0.3 to 1.5, p = 0.18). The effect is subtle in how it works. Guided attention is almost uniform: its entropy is about 5.05 nats, against 5.28 for uniform and 2.8 for the fixed query. The maps for the two candidate statements are nearly identical (total variation distance 0.03–0.05). Even so, the small statement-dependent differences matter:
+- When both candidates share one query (the mean of the two statements), accuracy drops to about 53%. This shared query is out of distribution for the scorer, so the drop does not isolate the causal effect of statement conditioning.
+- Uniform pooling (`mean_patches`) is 3.2 ± 1.8 points worse than guided attention.
+
+So conditioning on the statement helps, but not through visible localization in the attention maps.
+
+**RQ3: When does text guidance help?** The gains are not where we expected. Guided minus fixed attention is +0.9 on comparisons, +0.6 on lookups and +7.1 on `other`. Almost all of the `other` gain comes from DVQA statements about chart structure (legend colors, bar labels). Only the DVQA and `other` gains are significant; the comparison gain is not (p ≈ 0.1). The hypothesis that comparison statements benefit most is not supported. On ChartQA, guided attention is not better than fixed attention (−0.7 ± 1.2).
+
+**Cost.** All three heads have about 1.58M parameters. Attention over the patches makes training about 13× slower and needs about 2× the peak GPU memory. Peak memory is the extra memory during training, on top of the features kept on the GPU. Most of the 0.9 GB for the cheap models comes from gathering batch features.
+
+**Resolution: is the bottleneck in the encoding?** ChartQA and FigureQA stay near chance for every model at 224×224. To test whether that is a resolution problem, each padded chart is resized to 448×448 and cut into 4 quadrants, each encoded by the same frozen CLIP. The attention heads then see 784 patches instead of 196; nothing else changes. Test accuracy (mean ± std over 3 seeds):
+
+| | fixed 224 | fixed 448 | guided 224 | guided 448 | mean of patches 224 | mean of patches 448 |
+|---|---|---|---|---|---|---|
+| **all** | 58.7 ± 0.3 | 56.6 ± 0.9 | 60.3 ± 0.1 | **60.8 ± 1.0** | 57.1 ± 1.7 | 57.3 ± 2.1 |
+| chartqa | 54.3 | 53.1 | 53.6 | **56.4 ± 3.3** | 53.9 | 54.3 |
+| figureqa | 51.5 | 50.5 | 52.4 | 51.9 | 50.8 | 50.9 |
+| lookup | 57.4 | 56.1 | 58.0 | **60.2 ± 3.3** | 56.8 | 56.9 |
+| training time | 89 s | 825 s | 96 s | 821 s | 9 s | 587 s |
+
+- Only guided attention benefits, and only where reading matters: ChartQA +2.8 (CI 0.9 to 4.8, p = 0.006) and lookups +2.2 (CI 0.4 to 3.9). ChartQA has the highest native resolution (about 800×560). Overall the gain is +0.5 and not significant. The ChartQA gain is uneven across seeds (two improve, one does not).
+- Fixed attention gets worse (−2.1); distributing one learned query over more patches is a possible explanation, not a tested mechanism. So guided minus fixed grows from 1.6 to 4.2 points (CI 3.2 to 5.2), significant on every source and category. Guided attention at 448 is also significantly better than `global_mlp` (+1.1, CI 0.1 to 2.0, p = 0.025).
+- FigureQA does not move and ChartQA stays near 56%. Higher resolution provides limited gains under the tested encoder and heads.
+
+**Limitations.** Every model uses frozen CLIP ViT-B/16 features. Even at 448×448, ChartQA and FigureQA stay close to chance. This does not establish whether the required information is missing from the frozen features or whether the heads fail to extract it. The 448 runs keep the 784 patches in CPU memory, which makes training about 8.5× slower. Attention maps are qualitative and are not evidence of causal grounding.
+
