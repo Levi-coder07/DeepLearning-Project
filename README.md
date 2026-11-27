@@ -97,7 +97,61 @@ python -m src.features.extract --tiles
 python -m src.run --tiles --models attention_fixed attention_guided mean_patches --seeds 0 1 2
 ```
 
-### Outputs
+### Exploratory projections
+
+To project the **trained guided head**, including downloading a small test image
+sample and extracting frozen CLIP patches on CUDA, Apple MPS, or CPU:
+
+```bash
+python -m src.project_guided --per-source 30
+```
+
+This loads `attention_guided_seed0.pt` and the existing `texts.pt` cache. Each
+candidate statement queries its chart's 196 patches; the projected vector is the
+normalized 512-dimensional attention output **before** concatenation with text
+and scoring. Both PCA and t-SNE plots are saved as PNG/SVG, with coordinates,
+raw guided vectors, a checkpoint hash, and subset accuracy in
+`results/projections/`. Chart downloads use HTTP ZIP ranges; sampled patches are
+cached separately from the full experiment features. No weights are trained.
+Use `--checkpoint-seed`, `--seed`, `--batch-size`, or `--device` to change the run.
+The default uses 30 charts per source and keeps all their statement pairs.
+
+Analyze actual model failures using the saved candidate scores:
+
+```bash
+python -m src.analyze_projection_errors
+```
+
+This reuses both projection coordinates, colors pairs by model success/failure,
+and shows failed pairs with the rejected correct statement connected to the
+chosen incorrect statement. It also exports pair decisions, source/category
+breakdowns, and examples ranked by incorrect score advantage. Statement truth
+and model success are distinct labels; score margins are not probabilities.
+
+Project cached whole-chart or statement CLIP embeddings without retraining:
+
+```bash
+python -m src.project --features clip-image --method pca
+python -m src.project --features clip-text --method tsne
+```
+
+If feature caches are unavailable, run a wording-only PCA using TF-IDF (vocabulary
+and IDF fitted on training statements):
+
+```bash
+python -m src.project --features lexical --method pca
+```
+
+Each run samples up to 300 charts per source from the test split, retaining both
+candidates for every sampled pair. Image plots use one observation per chart.
+Outputs in `results/projections/` include an SVG colored by source (and statement
+correctness for text), coordinates with metadata in CSV, and settings in JSON.
+Use `--per-source`, `--split`, and `--seed` to change the sample. t-SNE first
+reduces normalized features to at most 50 PCs. Projections are exploratory:
+separation does not demonstrate correct chart reasoning, and repeated statements
+are not independent observations. Lexical features describe wording, not CLIP.
+
+### Experiment outputs
 
 | Path | Contents |
 |---|---|
